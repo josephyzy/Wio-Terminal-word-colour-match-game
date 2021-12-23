@@ -1,114 +1,195 @@
 #include <Arduino.h>
 
-#define BUTTON_TOP WIO_KEY_C
-#define BUTTON_MID WIO_KEY_B
-#define BUTTON_BOT WIO_KEY_A
+#include "Free_Fonts.h" //include free fonts library from https://github.com/Seeed-Studio/Seeed_Arduino_LCD/blob/master/examples/320x240/Free_Font_Demo/Free_Fonts.h
+#include "TFT_eSPI.h"
+#include "RTC_SAMD51.h"
 
-// remap buttons to suit orientation
-#define JOYSTICK_UP WIO_5S_LEFT
-#define JOYSTICK_DOWN WIO_5S_RIGHT
-#define JOYSTICK_LEFT WIO_5S_DOWN
-#define JOYSTICK_RIGHT WIO_5S_UP
-#define JOYSTICK_PRESS WIO_5S_PRESS
+// Font example
+#define FONT FMB12 // See "include/Free_Fonts.h" for options
 
-volatile int buttonTopPressed = 0;
-volatile int buttonMidPressed = 0;
-volatile int joystickUpPressed = 0;
-volatile int joystickDownPressed = 0;
-volatile int joystickLeftPressed = 0;
-volatile int joystickRightPressed = 0;
-volatile int joystickPressPressed = 0;
+// Variable updated inside interrupt service routine
+volatile int joystickPressed = 0;
 
-void ISR_BUTTON_TOP();
-void ISR_BUTTON_MID();
-void ISR_JOYSTICK_UP();
-void ISR_JOYSTICK_DOWN();
-void ISR_JOYSTICK_LEFT();
-void ISR_JOYSTICK_RIGHT();
-void ISR_JOYSTICK_PRESS();
+#define MAX_COLOURS 5
+unsigned int colourBackground[MAX_COLOURS] = {TFT_RED, TFT_GREEN, TFT_YELLOW, TFT_WHITE, TFT_BLUE};
+String colourWord[MAX_COLOURS]             = {"RED"  , "GREEN"  , "YELLOW"  , "WHITE"  , "BLUE"  };
+unsigned int colourBackgroundIndex = 0;
+unsigned int colourWordIndex = 1;
+String headerFooter[2] = {"XXXXXXXX", "++++++++"};
+unsigned int headerFooterIndex = 0;
 
+#define LIVES_START_VALUE 3
+unsigned int lives = LIVES_START_VALUE;
+unsigned int score = 0;
+unsigned int gameOver = 0;
+unsigned int firstBoot = 1;
+unsigned int previousUpdateSecondsTime = 0;
+
+TFT_eSPI tft;
+TFT_eSprite spr = TFT_eSprite(&tft); //Initializing buffer
+
+RTC_SAMD51 rtc; // Real time clock
+
+// Functions
+void ISR_WIO_5S_PRESS();
+void updateScoreAndLife();
+void updateScreenFirstBoot();
+void updateScreen();
+
+// put your setup code here, to run once:
 void setup()
 {
-  // put your setup code here, to run once:
-  Serial.begin(9600);
+  tft.begin();
+  tft.setRotation(2);
 
-  pinMode(WIO_KEY_A, INPUT_PULLUP);
-  pinMode(WIO_KEY_B, INPUT_PULLUP);
-  pinMode(WIO_KEY_C, INPUT_PULLUP);
-  pinMode(WIO_5S_UP, INPUT_PULLUP);
-  pinMode(WIO_5S_DOWN, INPUT_PULLUP);
-  pinMode(WIO_5S_LEFT, INPUT_PULLUP);
-  pinMode(WIO_5S_RIGHT, INPUT_PULLUP);
+  spr.createSprite(TFT_WIDTH, TFT_HEIGHT); // Create buffer (portrait)
+
+  rtc.begin();
+  DateTime now = DateTime(F(__DATE__), F(__TIME__));
+  rtc.adjust(now);
+
   pinMode(WIO_5S_PRESS, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(WIO_5S_PRESS), ISR_WIO_5S_PRESS, LOW);
 
-  attachInterrupt(digitalPinToInterrupt(BUTTON_TOP), ISR_BUTTON_TOP, LOW);
-  attachInterrupt(digitalPinToInterrupt(BUTTON_MID), ISR_BUTTON_MID, LOW);
-  attachInterrupt(digitalPinToInterrupt(JOYSTICK_UP), ISR_JOYSTICK_UP, LOW);
-  attachInterrupt(digitalPinToInterrupt(JOYSTICK_DOWN), ISR_JOYSTICK_DOWN, LOW);
-  attachInterrupt(digitalPinToInterrupt(JOYSTICK_LEFT), ISR_JOYSTICK_LEFT, LOW);
-  attachInterrupt(digitalPinToInterrupt(JOYSTICK_PRESS), ISR_JOYSTICK_PRESS, LOW);
-
-  // Limitation: only WIO_5S_UP or WIO_KEY_A but not both
-  //attachInterrupt(digitalPinToInterrupt(BUTTON_BOT), ISR_BUTTON_BOT, LOW);
-  attachInterrupt(digitalPinToInterrupt(JOYSTICK_RIGHT), ISR_JOYSTICK_RIGHT, LOW);
+  // if analog input pin 0 is unconnected, random analog
+  // noise will cause the call to randomSeed() to generate
+  // different seed numbers each time the sketch runs.
+  // randomSeed() will then shuffle the random function.
+  randomSeed(analogRead(0));
 }
 
+// put your main code here, to run repeatedly:
 void loop()
 {
-  // put your main code here, to run repeatedly:
-
-  if (buttonTopPressed)
+  if (firstBoot)
   {
-    Serial.print("buttonTopPressed\n");
-    buttonTopPressed = 0;
+    updateScreenFirstBoot();
+
+    // Wait till joystick pressed
+    while (joystickPressed == 0) {}
+
+    // Initialize variables
+    joystickPressed = 0;
+    firstBoot = 0;
+    previousUpdateSecondsTime = rtc.now().secondstime();
   }
 
-  if (buttonMidPressed)
+  if (rtc.now().secondstime() - previousUpdateSecondsTime > 0)    // Execute every 1 second
   {
-    Serial.print("buttonMidPressed\n");
-    buttonMidPressed = 0;
-  }
+    if (gameOver)
+    {
+      if (joystickPressed == 1)   // Restart game
+      {
+        score = 0;
+        lives = LIVES_START_VALUE;
+        gameOver = 0;
 
-  if (digitalRead(WIO_KEY_A) == LOW)
-  {
-    Serial.print("buttonBotPressed\n");
-  }
+        // Set index to different initial values
+        colourBackgroundIndex = 0;
+        colourWordIndex = 1;
 
-  if (joystickUpPressed)
-  {
-    Serial.print("joystickUpPressed\n");
-    joystickUpPressed = 0;
-  }
-
-  if (joystickDownPressed)
-  {
-    Serial.print("joystickDownPressed\n");
-    joystickDownPressed = 0;
-  }
-
-  if (joystickLeftPressed)
-  {
-    Serial.print("joystickLeftPressed\n");
-    joystickLeftPressed = 0;
-  }
-
-  if (joystickRightPressed)
-  {
-    Serial.print("joystickRightPressed\n");
-    joystickRightPressed = 0;
-  }
-
-  if (joystickPressPressed)
-  {
-    Serial.print("joystickPressPressed\n");
-    joystickPressPressed = 0;
+        joystickPressed = 0;
+      }
+    }
+    else
+    {
+      updateScoreAndLife();
+      updateScreen();
+    }
+    previousUpdateSecondsTime = rtc.now().secondstime();
   }
 }
 
-void ISR_BUTTON_TOP() { buttonTopPressed = 1; }
-void ISR_BUTTON_MID() { buttonMidPressed = 1; }
-void ISR_JOYSTICK_UP() { joystickUpPressed = 1; }
-void ISR_JOYSTICK_DOWN() { joystickDownPressed = 1; }
-void ISR_JOYSTICK_LEFT() { joystickLeftPressed = 1; }
-void ISR_JOYSTICK_RIGHT() { joystickRightPressed = 1; }
-void ISR_JOYSTICK_PRESS() { joystickPressPressed = 1; }
+void ISR_WIO_5S_PRESS() { joystickPressed = 1; }
+
+void updateScoreAndLife()
+{
+  if (colourBackgroundIndex == colourWordIndex)
+  {
+    if (joystickPressed == 1)
+    {
+      score += 1;
+      joystickPressed = 0;
+    }
+    else
+    {
+      lives -= 1;
+      if (lives == 0)
+      {
+        gameOver = 1;
+      }
+    }
+  }
+  else
+  {
+    if (joystickPressed == 1)
+    {
+      lives -= 1;
+      if (lives == 0)
+      {
+        gameOver = 1;
+      }
+      joystickPressed = 0;
+    }
+  }
+}
+
+void updateScreenFirstBoot()
+{
+  spr.fillSprite(TFT_WHITE);
+
+  spr.setTextDatum(MC_DATUM);
+  spr.setFreeFont(FMB18);
+  spr.setTextColor(TFT_BLACK);
+
+  spr.drawString("Press", 120, 40);
+  spr.drawString("joystick", 120, 80);
+  spr.drawString("when", 120, 120);
+  spr.drawString("word", 120, 160);
+  spr.drawString("and", 120, 200);
+  spr.drawString("colour", 120, 240);
+  spr.drawString("matches", 120, 280);
+
+  spr.pushSprite(0, 0); // Push to LCD
+}
+
+void updateScreen()
+{
+  colourBackgroundIndex = rand() % MAX_COLOURS;
+  spr.fillSprite(colourBackground[colourBackgroundIndex]);
+
+  spr.setTextDatum(TL_DATUM);
+  spr.setFreeFont(FMB18);
+  spr.setTextColor(TFT_BLACK);
+  String scoreText = "Score:";
+  scoreText = scoreText + String(score);
+  spr.drawString(scoreText, 0, 0);
+  String livesText = "Lives:";
+  livesText = livesText + String(lives);
+  spr.drawString(livesText, 0, 30);
+
+  spr.setTextDatum(MC_DATUM);
+  spr.setFreeFont(FMB24);
+  spr.setTextColor(TFT_BLACK);
+
+  spr.drawString(headerFooter[headerFooterIndex], 120, 110);
+  spr.drawString(headerFooter[headerFooterIndex], 120, 250);
+  if (gameOver)
+  {
+    spr.drawString("GAME", 120, 160);
+    spr.drawString("OVER", 120, 200);
+
+    spr.setFreeFont(FMB9);
+    spr.drawString("Press joystick", 120, 280);
+    spr.drawString("to try again", 120, 300);
+  }
+  else
+  {
+    colourWordIndex = rand() % MAX_COLOURS;
+    spr.drawString(colourWord[colourWordIndex], 120, 180);
+  }
+  
+  spr.pushSprite(0, 0); // Push to LCD
+
+  headerFooterIndex = (headerFooterIndex + 1) % 2;
+}
